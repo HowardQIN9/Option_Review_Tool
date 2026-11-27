@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from datetime import date
 
 import pandas as pd
+
+from .i18n import DEFAULT_LANG, Lang, label, t
 
 # Filter field name -> episodes column it applies to (multi-select fields only).
 CATEGORICAL_COLUMNS: dict[str, str] = {
@@ -15,6 +17,16 @@ CATEGORICAL_COLUMNS: dict[str, str] = {
     "times_of_day": "tod",
     "hold_buckets": "hold_bucket",
     "add_types": "add_type",
+}
+
+# Filter field name -> i18n key of its label.
+FIELD_LABEL_KEYS: dict[str, str] = {
+    "underlyings": "d_ticker",
+    "option_types": "f_type",
+    "dte_buckets": "f_dte",
+    "times_of_day": "f_tod",
+    "hold_buckets": "f_hold",
+    "add_types": "f_add",
 }
 
 
@@ -52,24 +64,21 @@ class TradeFilter:
             mask &= trades["overnight"] == self.overnight
         return trades[mask]
 
-    def describe(self) -> list[str]:
-        """Human-readable list of the active conditions (for export metadata)."""
-        labels = {
-            "underlyings": "标的",
-            "option_types": "Call/Put",
-            "dte_buckets": "DTE",
-            "times_of_day": "入场时段",
-            "hold_buckets": "持仓时长",
-            "add_types": "建仓方式",
-        }
+    def describe(self, lang: Lang = DEFAULT_LANG) -> list[str]:
+        """Human-readable list of the active conditions (shown in the UI and in exports)."""
         out = []
         if self.start or self.end:
-            out.append(f"日期：{self.start or '最早'} 至 {self.end or '最新'}")
-        for f in fields(self):
-            if f.name in labels and getattr(self, f.name):
-                out.append(f"{labels[f.name]}：{'、'.join(getattr(self, f.name))}")
+            start = self.start or t("d_earliest", lang)
+            end = self.end or t("d_latest", lang)
+            out.append(t("d_date", lang, start=start, end=end))
+        for name, key in FIELD_LABEL_KEYS.items():
+            selected = getattr(self, name)
+            if selected:
+                values = t("d_join", lang).join(label(v, lang) for v in selected)
+                out.append(t("d_item", lang, name=t(key, lang), values=values))
         if self.outcome:
-            out.append(f"结果：{'盈利' if self.outcome == 'win' else '亏损'}")
+            out.append(t("d_item", lang, name=t("f_outcome", lang), values=t(self.outcome, lang)))
         if self.overnight is not None:
-            out.append(f"隔夜：{'是' if self.overnight else '否'}")
-        return out or ["无筛选（全部交易）"]
+            value = t("yes" if self.overnight else "no", lang)
+            out.append(t("d_item", lang, name=t("f_overnight", lang), values=value))
+        return out or [t("d_none", lang)]

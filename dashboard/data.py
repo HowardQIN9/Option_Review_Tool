@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import config
+from .notes import trade_key
 
 
 class MissingDataError(FileNotFoundError):
@@ -28,8 +29,10 @@ def load_episodes(path: Path = config.EPISODES_CSV) -> pd.DataFrame:
     df["exit_time"] = _to_ny(df["exit_time"])
     df["day"] = pd.to_datetime(df["day"]).dt.date
     df["expiry"] = pd.to_datetime(df["expiry"]).dt.date
-    df["trade_id"] = range(1, len(df) + 1)
-    return df.sort_values("entry_time").reset_index(drop=True)
+    df = df.sort_values("entry_time").reset_index(drop=True)
+    df["trade_id"] = range(1, len(df) + 1)  # display number, may shift when new trades are added
+    df["trade_key"] = [trade_key(o, t) for o, t in zip(df["occ"], df["entry_time"], strict=True)]  # stable id
+    return df
 
 
 def load_fills(path: Path = config.FILLS_CSV) -> pd.DataFrame:

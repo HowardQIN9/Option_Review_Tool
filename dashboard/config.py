@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = ROOT / "output"
 DATA_DIR = ROOT / "data"
 EXPORT_DIR = ROOT / "exports"
+NOTES_FILE = ROOT / "notes" / "notes.json"
 
 EPISODES_CSV = OUTPUT_DIR / "episodes.csv"
 FILLS_CSV = OUTPUT_DIR / "fills_standardized.csv"

@@ -28,3 +28,11 @@ def test_describe_lists_active_conditions():
     assert "标的：SPY、QQQ" in text
     assert "结果：盈利" in text
     assert TradeFilter().describe() == ["无筛选（全部交易）"]
+
+
+def test_describe_in_english():
+    text = TradeFilter(underlyings=("SPY",), add_types=("加仓-价格更低(摊平)",), overnight=False).describe("en")
+    assert "Ticker: SPY" in text
+    assert "Position building: Added lower (averaging down)" in text
+    assert "Overnight: No" in text
+    assert TradeFilter().describe("en") == ["No filters (all trades)"]

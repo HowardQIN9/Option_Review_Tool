@@ -8,6 +8,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from .i18n import DEFAULT_LANG, Lang, t
+
 PAD = timedelta(minutes=30)
 BUY_COLOR, SELL_COLOR = "#3b82f6", "#ef4444"  # readable on both cream and deep-green themes
 
@@ -28,6 +30,7 @@ def replay_figure(
     fills: pd.DataFrame,
     option_bars: pd.DataFrame,
     underlying_bars: pd.DataFrame,
+    lang: Lang = DEFAULT_LANG,
 ) -> go.Figure:
     """Option price (top) and underlying price (bottom) around the trade, with fills marked."""
     start, end = episode["entry_time"], episode["exit_time"]
@@ -40,7 +43,10 @@ def replay_figure(
         shared_xaxes=True,
         vertical_spacing=0.06,
         row_heights=[0.6, 0.4],
-        subplot_titles=(f"期权 {episode['occ']}（1 分钟成交价）", f"标的 {episode['underlying']}"),
+        subplot_titles=(
+            t("chart_option", lang, occ=episode["occ"]),
+            t("chart_underlying", lang, symbol=episode["underlying"]),
+        ),
     )
     if not opt.empty:
         fig.add_trace(
@@ -49,7 +55,7 @@ def replay_figure(
                 y=opt["close"],
                 mode="lines+markers",
                 marker={"size": 3},
-                name="期权价格",
+                name=t("chart_option_price", lang),
                 line={"width": 1.5},
             ),
             row=1,
@@ -57,12 +63,18 @@ def replay_figure(
         )
     if not und.empty:
         fig.add_trace(
-            go.Scatter(x=und.index, y=und["close"], mode="lines", name="标的价格", line={"width": 1.5}),
+            go.Scatter(
+                x=und.index, y=und["close"], mode="lines", name=t("chart_underlying_price", lang), line={"width": 1.5}
+            ),
             row=2,
             col=1,
         )
 
-    markers = (("BTO", BUY_COLOR, "triangle-up", "买入"), ("STC", SELL_COLOR, "triangle-down", "卖出"))
+    markers = (
+        ("BTO", BUY_COLOR, "triangle-up", t("chart_buy", lang)),
+        ("STC", SELL_COLOR, "triangle-down", t("chart_sell", lang)),
+    )
+    price, qty = t("chart_price", lang), t("chart_qty", lang)
     for code, color, symbol, label in markers:
         f = fills[fills["code"] == code]
         if f.empty:
@@ -76,7 +88,7 @@ def replay_figure(
                 marker={"color": color, "size": 12, "symbol": symbol, "line": {"color": "white", "width": 1}},
                 customdata=f[["qty"]].to_numpy(),
                 hovertemplate=(
-                    f"{label} %{{x|%m-%d %H:%M:%S}}<br>价格 %{{y:.2f}} × %{{customdata[0]:.0f}} 张<extra></extra>"
+                    f"{label} %{{x|%m-%d %H:%M:%S}}<br>{price} %{{y:.2f}} × %{{customdata[0]:.0f}} {qty}<extra></extra>"
                 ),
             ),
             row=1,
@@ -86,7 +98,7 @@ def replay_figure(
     fig.add_hline(
         y=episode["avg_entry"],
         line={"dash": "dot", "color": BUY_COLOR, "width": 1},
-        annotation_text="买入均价",
+        annotation_text=t("chart_avg_entry", lang),
         annotation_position="top left",
         row=1,
         col=1,

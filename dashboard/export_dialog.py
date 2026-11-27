@@ -12,6 +12,8 @@ import streamlit as st
 
 from .export import PROMPT_TEMPLATES, build_pack, write_pack
 from .filters import TradeFilter
+from .i18n import Lang, t
+from .notes import NoteStore
 
 PREVIEW_CHARS = 3000
 
@@ -27,36 +29,30 @@ def _preview(files: dict[str, str]) -> None:
                 st.markdown(text)
 
 
-@st.dialog("导出给 LLM 分析", width="large")
-def export_dialog(trades: pd.DataFrame, fills: pd.DataFrame, flt: TradeFilter) -> None:
-    st.markdown(
-        f"把当前筛选出的 **{len(trades)} 笔交易**导出成一个分析包文件夹，"
-        "再用 **Claude Code** 或 **Codex** 打开这个文件夹，对它说：**“读 PROMPT.md，按要求开始分析。”**"
-    )
-    st.caption("筛选条件：" + "；".join(flt.describe()))
+def _body(trades: pd.DataFrame, fills: pd.DataFrame, flt: TradeFilter, notes: NoteStore, lang: Lang) -> None:
+    st.markdown(t("x_intro", lang, n=len(trades)))
+    st.caption(t("filters_caption", lang) + t("list_sep", lang).join(flt.describe(lang)))
 
-    include_amounts = st.toggle(
-        "包含美元金额和仓位张数",
-        value=False,
-        help="关闭时，盈亏金额、成本、手续费、张数都会被移除，只保留收益率、比例和每股价格。",
-    )
+    include_amounts = st.toggle(t("x_amounts", lang), value=False, help=t("x_amounts_help", lang))
     if include_amounts:
-        st.warning("分析包会包含你的真实盈亏金额。用 LLM 分析时，这些数据会发送给 Anthropic 或 OpenAI。", icon="🔓")
+        st.warning(t("x_amounts_on", lang), icon="🔓")
     else:
-        st.success("不包含金额：只发送收益率、比例、价格和行情数据。", icon="🔒")
+        st.success(t("x_amounts_off", lang), icon="🔒")
+    include_notes = st.toggle(t("x_notes", lang), value=False, help=t("x_notes_help", lang))
 
-    template = st.selectbox("Prompt 模板", list(PROMPT_TEMPLATES))
-    prompt = st.text_area("你的问题（可修改）", value=PROMPT_TEMPLATES[template], height=120)
+    templates = PROMPT_TEMPLATES[lang]
+    template = st.selectbox(t("x_template", lang), list(templates))
+    prompt = st.text_area(t("x_question", lang), value=templates[template], height=120)
 
-    pack = build_pack(trades, fills, flt, prompt, include_amounts)
-    with st.expander("预览将导出的内容"):
+    pack = build_pack(trades, fills, flt, prompt, include_amounts, lang, notes=notes if include_notes else None)
+    with st.expander(t("x_preview", lang)):
         _preview(pack.files)
 
     left, right = st.columns(2)
-    if left.button("生成分析包文件夹", type="primary", width="stretch"):
+    if left.button(t("x_write", lang), type="primary", width="stretch"):
         st.session_state["last_pack"] = str(write_pack(pack))
     right.download_button(
-        "下载为 ZIP",
+        t("x_zip", lang),
         data=pack.zip_bytes(),
         file_name=f"{pack.folder.name}.zip",
         mime="application/zip",
@@ -65,6 +61,13 @@ def export_dialog(trades: pd.DataFrame, fills: pd.DataFrame, flt: TradeFilter) -
     )
 
     if folder := st.session_state.get("last_pack"):
-        st.success(f"已生成：`{folder}`")
-        if os.name == "nt" and st.button("在资源管理器中打开"):
+        st.success(t("x_done", lang, folder=folder))
+        if os.name == "nt" and st.button(t("x_open", lang)):
             os.startfile(folder)  # local and user-initiated
+
+
+def open_export_dialog(
+    trades: pd.DataFrame, fills: pd.DataFrame, flt: TradeFilter, notes: NoteStore, lang: Lang
+) -> None:
+    """Open the export dialog; its title follows the current language, so it is built per call."""
+    st.dialog(t("x_title", lang), width="large")(_body)(trades, fills, flt, notes, lang)

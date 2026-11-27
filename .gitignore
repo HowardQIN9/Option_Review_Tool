@@ -15,3 +15,6 @@ __pycache__/
 
 # Dashboard exports (contain trading data)
 exports/
+
+# Personal journal notes
+notes/

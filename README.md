@@ -1,153 +1,158 @@
-# 短线期权交易复盘：Robinhood 成交记录 + Alpaca 分钟行情
+# Short-Dated Option Trade Review: Robinhood Fills + Alpaca Minute Bars
 
-把自己的期权交易记录，和交易当时逐分钟的市场行情对齐，再用统计方法找出交易里的规律和问题。
+**English** | [简体中文](README.zh-CN.md)
 
-附带一个本地运行的复盘界面：
-- **筛选**：按日期（时间段或单日）、标的（可搜索）、Call/Put、DTE、入场时段、持仓时长、盈亏、是否隔夜、建仓方式筛选交易。
-- **统计**：笔数、胜率、单笔期望、Profit Factor 等随筛选实时更新，并附 95% 置信区间；样本太少时会给出提示。
-- **单笔复盘**：任选一笔交易，查看当时期权和标的的 1 分钟走势，标出每次买入和卖出。
-- **导出给 LLM 分析**：把筛选后的交易打包成文件夹，用 Claude Code 或 Codex 打开即可分析。可以选择是否包含美元金额和仓位张数。
+Line up my own option trades with the minute-by-minute market data at the time each one was placed, then use statistics to find the patterns and problems in them.
 
-> 这份 README 面向懂交易、不一定懂代码的读者。前半部分讲做了什么、怎么做的，后面是安装和运行方法。
-> 也可以把整份文档交给 ChatGPT 或 Claude 等 LLM，让它解释或回答问题。
+The project includes a dashboard that runs on your own computer:
+- **Filters**: date (a range or a single day), ticker (searchable), Call/Put, DTE, entry time of day, holding time, win/loss, overnight holds, and how the position was built.
+- **Statistics**: trade count, win rate, expectancy per trade, Profit Factor and more. They update as you filter, come with 95% confidence intervals, and show a warning when the sample is too small.
+- **Calendar**: a small Mon–Fri month view coloured by daily P&L, with days that have a note marked. Click a day, a week or the month to filter, or "All" to go back to every date.
+- **Journal**: a note for each day (market conditions, mindset, plan) and for each trade (reasoning, execution, lessons), with quick tags such as Planned, Impulsive or Cut loss late. Notes are saved only on your computer.
+- **Trade replay**: pick any trade to see the option and the underlying minute by minute, with every buy and sell marked.
+- **Export for LLM analysis**: package the filtered trades as a folder that Claude Code or Codex can open and analyse. You choose whether dollar amounts, position sizes and your notes are included.
+- **Chinese / English**: both the interface and the exported analysis pack.
 
----
-
-## 一、要解决的问题
-
-Robinhood 的对账单只记录**哪天**买卖了什么合约、价格多少，没有记录**几点几分**成交。
-
-没有精确时间，就回答不了复盘里最关键的问题：
-
-- 入场的时候，标的正在涨、在跌，还是在横盘？
-- 拿着的过程中，最多赚过多少、最多亏过多少？
-- 卖出之后，价格又往哪个方向走了？
-- 最后的亏损，是方向看错了，还是时间价值（Theta）被耗掉了？
-
-所以这个项目的核心工作是**补上时间维度**：把每一笔成交精确地放回当时的行情里。
+> This README is written for readers who know trading but not necessarily code. The first half explains what was done and how. Installation and usage come after that.
+> You can also hand the whole document to an LLM such as ChatGPT or Claude and ask it questions.
 
 ---
 
-## 二、数据来源
+## 1. The problem
 
-| 数据 | 来源 | 内容 |
+A Robinhood statement records **which day** a contract was bought or sold and at what price. It does not record **the time of day** of the fill.
+
+Without exact times, you can't answer the questions that matter most in a review:
+
+- When I entered, was the underlying rising, falling or flat?
+- While I held it, how far was I up at best, and down at worst?
+- After I sold, where did the price go?
+- Did the loss come from calling the direction wrong, or from time decay (Theta)?
+
+So the core of the project is **adding the time dimension back**: putting every fill exactly where it happened in the market data.
+
+---
+
+## 2. Data sources
+
+| Data | Source | Contents |
 |---|---|---|
-| 交易记录 | Robinhood 对账单 CSV | 日期、合约、买卖方向、数量、价格、金额（含手续费） |
-| 精确成交时间 | Robinhood API（只读） | 每笔成交的时间戳（精确到毫秒），以及下单方式（限价/市价）、限价价格 |
-| 标的的 1 分钟 K 线 | Alpaca 行情 API（免费账户） | 开高低收、成交量、成交笔数、VWAP；SIP 全市场合并行情 |
-| 期权合约本身的 1 分钟 K 线 | Alpaca 行情 API（免费账户） | 每个交易过的合约，在持仓期间逐分钟的成交价格 |
+| Trade history | Robinhood statement CSV | Date, contract, side, quantity, price, amount (incl. fees) |
+| Exact fill times | Robinhood API (read-only) | Timestamp of every fill (millisecond precision), order type (limit/market), limit price |
+| Underlying 1-minute bars | Alpaca market data API (free account) | OHLC, volume, trade count, VWAP; SIP consolidated feed |
+| 1-minute bars of each option contract | Alpaca market data API (free account) | Minute-by-minute trade prices of every contract traded, over the holding period |
 
-- **Robinhood API** 的部分只读取历史订单，不会下单、改单或撤单。Robinhood 没有官方的公开 API，这里用的是开源库 `robin_stocks`，需要自己登录账户。
-- **下载哪些行情由程序自动决定**：程序读取对账单，找出交易过的标的、日期和合约，只下载需要的部分。
-  - SPY、QQQ、IWM 下载了整个区间的每一个交易日，用来和"没交易的时刻"做对照。
-  - 其他个股只下载有交易的那几天。
-  - 期权合约从第一次买入下载到最后一次卖出，隔夜持仓的日子也包括在内。
-
----
-
-## 三、处理流程
-
-```
-Robinhood 对账单 CSV ──┐
-                        ├─ 逐笔匹配 ─→ 带精确时间的成交记录
-Robinhood API 成交时间 ─┘                     │
-                                               ├─ 按时间对齐 ─→ 每笔交易逐分钟复盘数据 ─→ 统计分析与报告
-Alpaca 标的 + 期权 1 分钟 K 线 ────────────────┘
-```
-
-1. **匹配成交时间**：按日期、合约、开平方向、数量、价格，把对账单的每一行和 API 返回的每一笔成交对上。
-2. **组成完整交易**：同一个合约从空仓到建仓、再回到空仓，算作一笔完整交易。中间的加仓、分批卖出都归在同一笔里。
-3. **对齐行情**：给每笔交易配上入场前、持仓中、卖出后的标的和期权分钟价格。
-4. **计算指标、做统计检验**，生成报告和图表。
+- **Robinhood API**: the code only reads order history. It never places, changes or cancels orders. Robinhood has no official public API, so this uses the open-source library `robin_stocks`, and you log in to your own account.
+- **What gets downloaded is decided automatically.** The scripts read the statement to find the tickers, days and contracts you traded, and download only those.
+  - SPY, QQQ and IWM: every trading day in the period, so the moments you traded can be compared with the moments you didn't.
+  - Other stocks: only the days you traded them.
+  - Option contracts: from the first buy to the last sell, including days held overnight.
 
 ---
 
-## 四、每笔交易计算的指标
+## 3. Pipeline
 
-| 指标 | 含义 |
+```
+Robinhood statement CSV ──┐
+                           ├─ match fill by fill ─→ fills with exact times
+Robinhood API fill times ──┘                            │
+                                                         ├─ align by time ─→ per-trade minute data ─→ statistics & report
+Alpaca 1-min bars (underlying + options) ────────────────┘
+```
+
+1. **Match fill times**: each statement row is matched to an API fill on date, contract, open/close side, quantity and price.
+2. **Build round trips**: one contract going from flat to a position and back to flat counts as one trade. Adding to the position and scaling out stay in the same trade.
+3. **Align with market data**: each trade gets the underlying and option minute prices before entry, during the hold and after exit.
+4. **Compute metrics and run statistical tests**, then produce the report and charts.
+
+---
+
+## 4. Metrics computed for each trade
+
+| Metric | Meaning |
 |---|---|
-| MFE（最大浮盈） | 持仓期间期权价格最高时，相对买入均价涨了多少 |
-| MAE（最大浮亏） | 持仓期间期权价格最低时，相对买入均价跌了多少 |
-| 兑现比例 | 实际拿到的收益 ÷ 持仓期间的最大浮盈 |
-| 卖出后走势 | 卖出后 5 / 15 / 30 / 60 分钟内，期权又涨或跌了多少（判断是否卖早或卖晚） |
-| 入场前后的标的走势 | 入场前 15 分钟标的已经走了多少，入场后 15 分钟又走了多少（判断是追在启动还是追在末端） |
-| RVOL（相对成交量） | 入场时的成交量，相对同一时段平常水平的倍数 |
-| DTE、Delta、隐含波动率 | 入场时距离到期的天数、合约的 Delta 和 IV（IV 和 Greeks 由 Black-Scholes 从成交价反推） |
-| 盈亏归因 | 把每笔盈亏拆成三部分：标的价格变动、时间流逝（Theta）、隐含波动率变化 |
+| MFE (maximum favourable excursion) | How far the option's high during the hold rose above the average entry price |
+| MAE (maximum adverse excursion) | How far the option's low during the hold fell below the average entry price |
+| Capture ratio | Realized gain ÷ maximum open profit during the hold |
+| Price after exit | How much the option rose or fell 5 / 15 / 30 / 60 minutes after selling (sold too early or too late?) |
+| Underlying before and after entry | How far the underlying had moved in the 15 minutes before entry, and in the 15 minutes after (entering at the start of a move, or chasing its end?) |
+| RVOL (relative volume) | Volume at entry vs. the normal level for that time of day |
+| DTE, Delta, implied volatility | Days to expiry, the contract's Delta and IV at entry (IV and Greeks are backed out of fill prices with Black-Scholes) |
+| P&L attribution | Each trade's P&L split into underlying price move, time decay (Theta) and change in implied volatility |
 
-**统计方法**
+**Statistical methods**
 
-- 期望值和胜率都附 **95% 置信区间**。期望值按交易日分块重抽样，保留同一天内交易之间的相关性。
-- **对照组**：同一天、同一标的、行情条件相似，但我**没有**交易的那些分钟。用来判断我的择时是否比机械条件更好。
-- **样本内 / 样本外检验**：用前半段数据找规则，再拿后半段数据检验，避免"看着答案挑参数"。
-
----
-
-## 五、数据核验
-
-- 650 笔期权成交，**全部匹配到精确成交时间**。
-- 手续费逐行核对：每张合约 $0.04–$0.08，没有异常。
-- 对账单里有 41 行看起来完全相同，经 API 核对都是同一张订单分几次成交，不是重复记录。
-- 6 笔到期作废的合约，按到期日 16:00、价格 0 平仓处理。
-- 期末没有未平仓头寸，没有对不上的记录。
+- Expectancy and win rate come with **95% confidence intervals**. The expectancy interval resamples whole trading days, which keeps the correlation between trades on the same day.
+- **Control group**: minutes on the same day, in the same ticker, under similar conditions, when I did **not** trade. This tests whether my timing beats a mechanical rule.
+- **In-sample / out-of-sample testing**: rules are found on the first half of the data and checked on the second half, to avoid fitting parameters to known answers.
 
 ---
 
-## 六、局限
+## 5. Data checks
 
-- **没有买卖报价（bid/ask）。** 期权 K 线只有成交价，所以算不出真实价差和滑点，回测里止盈的成交可能偏乐观。
-- **冷门合约的数据不连续。** 一分钟内没有成交就没有 K 线。
-- **没有账户净值数据**，只能统计每笔交易的盈亏，算不了账户收益率。
-- **IV 和 Greeks 是估算值**：用 Black-Scholes 从成交价反推，假设利率 4%，不计股息，按欧式期权处理。
-- **样本量有限**：265 笔交易、约 9 个月。很多分组只有几十笔，结论只能当作假设。
-- **交易风格和时间段是混在一起的**：前期多做个股和远期合约，后期多做 ETF 短线，前后对比不能完全归因于风格。
-- 分析由 LLM 编写程序完成，**每个数字都由代码计算**，重新运行会得到同样的结果，不是 LLM 的主观判断。
+- All 650 option fills **were matched to an exact fill time**.
+- Fees were checked row by row: $0.04–$0.08 per contract, with no anomalies.
+- 41 statement rows that look identical turned out, when checked against the API, to be partial fills of the same order rather than duplicates.
+- 6 contracts that expired worthless are treated as closed at a price of 0 at 16:00 on the expiry date.
+- No positions were left open, and no records failed to match.
 
 ---
 
-## 七、新手安装（没有编程经验）
+## 6. Limitations
 
-如果你只是想了解这个项目，读到这里就够了，不需要安装任何东西。下面是给想**用自己的 Robinhood 交易记录跑一遍**的人准备的。
+- **No bid/ask quotes.** Option bars only have trade prices, so the real spread and slippage can't be measured, and take-profit fills in backtests may be optimistic.
+- **Sparse data for illiquid contracts.** A minute with no trades has no bar.
+- **No account equity data.** Only per-trade P&L can be computed, not account returns.
+- **IV and Greeks are estimates.** They are backed out of fill prices with Black-Scholes, assuming a 4% rate, no dividends and European exercise.
+- **Limited sample.** 265 trades over about 9 months. Many subgroups have only a few dozen trades, so their conclusions are hypotheses.
+- **Style and time period are mixed together.** Early on I traded more single stocks and longer-dated contracts, later more short-dated ETF options, so before/after comparisons can't be attributed to style alone.
+- The analysis was written by an LLM as code. **Every number is computed by the code**, and re-running it gives the same results. They are not the LLM's subjective judgement.
 
-### 需要准备的东西
+---
 
-| 准备什么 | 说明 | 费用 |
+## 7. Installation for beginners (no programming experience)
+
+If you only want to understand the project, you can stop here; nothing needs to be installed. The steps below are for people who want to **run it on their own Robinhood history**.
+
+### What you need
+
+| Item | Notes | Cost |
 |---|---|---|
-| Python | 运行程序的软件。推荐安装 Anaconda，它自带 Python 和大部分要用的库 | 免费 |
-| 这个项目的文件 | 在 GitHub 页面点绿色的 **Code** 按钮 → **Download ZIP**，下载后解压 | 免费 |
-| Alpaca 账户 | 用来下载历史行情，注册后拿到 API key（一串密钥） | 免费 |
-| Robinhood 对账单 | 在 Robinhood 里导出交易记录 CSV | 免费 |
+| Python | The software that runs the programs. Installing Anaconda is recommended; it includes Python and most of the libraries used here | Free |
+| This project's files | On the GitHub page, click the green **Code** button → **Download ZIP**, then unzip it | Free |
+| An Alpaca account | Used to download historical market data. You get an API key (a pair of secret strings) after signing up | Free |
+| A Robinhood statement | Export your trade history as a CSV from Robinhood | Free |
 
-### 最省事的方法：让 AI 帮你装和运行
+### Easiest: let an AI install and run it
 
-1. 安装 [Claude 桌面版](https://claude.ai/download)，打开 **Code** 页面。
-2. 选择你解压好的项目文件夹。
-3. 对 Claude 说："按 README 帮我安装并运行这个项目。"
-4. Claude 会帮你安装 Python 和依赖、运行脚本。遇到需要确认的步骤时，它会先问你。
+1. Install the [Claude desktop app](https://claude.ai/download) and open the **Code** tab.
+2. Choose the unzipped project folder.
+3. Tell Claude: "Install and run this project following the README."
+4. Claude installs Python and the dependencies and runs the scripts. It asks you before steps that need your confirmation.
 
-**有两件事需要你自己来，不要交给 AI：**
-- **登录 Robinhood**：账号、密码和两步验证，自己在终端窗口里输入。
-- **填写 Alpaca API key**：自己设置，不要把密钥贴进聊天里。
+**Two things you should do yourself, not the AI:**
+- **Logging in to Robinhood**: type your username, password and two-factor code into the terminal window yourself.
+- **Setting the Alpaca API key**: set it yourself, and don't paste the key into the chat.
 
-### 手动安装（Windows）
+### Manual installation (Windows)
 
-**第 1 步：安装 Anaconda**
+**Step 1: Install Anaconda**
 
-到 [anaconda.com/download](https://www.anaconda.com/download) 下载 Windows 版并安装，安装选项保持默认即可。
+Download the Windows version from [anaconda.com/download](https://www.anaconda.com/download) and install it with the default options.
 
-**第 2 步：打开命令行窗口**
+**Step 2: Open a command window**
 
-在开始菜单里搜索并打开 **Anaconda Prompt**。之后的命令都在这个窗口里输入，每输完一行按回车。
+Search the Start menu for **Anaconda Prompt** and open it. Type the commands below into this window, pressing Enter after each line.
 
-**第 3 步：进入项目文件夹**
+**Step 3: Go to the project folder**
 
 ```powershell
-cd "C:\Users\你的用户名\Downloads\项目文件夹名"
+cd "C:\Users\your-username\Downloads\project-folder"
 ```
 
-把引号里的路径换成你解压后的实际位置。一个简单的办法：先输入 `cd ` 加一个空格，再把文件夹从资源管理器里直接拖进窗口，路径会自动填好。
+Replace the path in quotes with where you unzipped the project. A shortcut: type `cd ` followed by a space, then drag the folder from File Explorer into the window and the path is filled in for you.
 
-**第 4 步：创建独立环境并安装依赖库**
+**Step 4: Create a separate environment and install the libraries**
 
 ```bat
 python -m venv .venv
@@ -155,40 +160,40 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-- 第一行在项目文件夹里建一个独立的 Python 环境，项目用到的库都装在这里，不会影响电脑上的其他程序。
-- 第二行进入这个环境。成功后，命令行开头会出现 `(.venv)`。**以后每次打开新窗口，都要先进入项目文件夹，再运行这一行。**
-- 第三行下载项目需要的所有库，可能需要几分钟。
+- The first line creates a separate Python environment inside the project folder. The project's libraries are installed there and don't affect other programs on your computer.
+- The second line enters that environment. When it works, the prompt starts with `(.venv)`. **Every time you open a new window, go to the project folder and run this line first.**
+- The third line downloads all the libraries the project needs. It may take a few minutes.
 
-**第 5 步：注册 Alpaca，拿到 API key**
+**Step 5: Sign up for Alpaca and get an API key**
 
-1. 到 [alpaca.markets](https://alpaca.markets/) 注册一个免费账户。
-2. 登录后，在控制台里找到 API Keys，生成一组 key。你会得到两串字符：**Key** 和 **Secret**。
-3. Secret 只会显示一次，记得先保存好。不要把它发给别人，也不要上传到网上。
+1. Create a free account at [alpaca.markets](https://alpaca.markets/).
+2. After logging in, find API Keys in the dashboard and generate a key. You get two strings: a **Key** and a **Secret**.
+3. The Secret is shown only once, so save it first. Don't share it with anyone or upload it anywhere.
 
-**第 6 步：放好对账单**
+**Step 6: Add your statement**
 
-把从 Robinhood 导出的 CSV 放进项目文件夹（和 `README.md` 放在一起）。文件夹里只能有这一个 `.csv` 文件。
+Put the CSV exported from Robinhood into the project folder (next to `README.md`). It must be the only `.csv` file there.
 
-**第 7 步：按下一节的第 3 步开始运行**
+**Step 7: Continue from step 3 of the next section**
 
-从"导出精确成交时间"开始，依次往下做即可。
+Start at "Export exact fill times" and work through the steps in order.
 
-### 常见问题
+### Common problems
 
-- **提示 `'python' 不是内部或外部命令`**：说明没有在 Anaconda Prompt 里运行，或者 Python 没装好。关掉窗口，从开始菜单重新打开 Anaconda Prompt 再试。
-- **提示 `No module named ...`**：通常是忘了进入环境。先运行 `.venv\Scripts\activate`，确认开头有 `(.venv)` 再试；还不行就重新运行一次 `pip install -r requirements.txt`。
-- **提示 `set ALPACA_API_KEY and ALPACA_API_SECRET`**：说明 Alpaca key 没有设置，或者关掉窗口后失效了。每次打开新窗口都要重新设置一次。
-- **Robinhood 登录失败**：确认账号密码正确，并留意手机上的两步验证提醒。
+- **`'python' is not recognized as an internal or external command`**: you are not in Anaconda Prompt, or Python isn't installed correctly. Close the window, reopen Anaconda Prompt from the Start menu and try again.
+- **`No module named ...`**: usually the environment isn't active. Run `.venv\Scripts\activate`, check that the prompt starts with `(.venv)`, and try again. If it still fails, run `pip install -r requirements.txt` once more.
+- **`set ALPACA_API_KEY and ALPACA_API_SECRET`**: the Alpaca key isn't set, or it was lost when the window closed. It must be set again in every new window.
+- **Robinhood login fails**: check your username and password, and watch your phone for the two-factor prompt.
 
-**安全提示：** Robinhood 登录成功后，程序会在你电脑的用户文件夹里保存一个登录凭证（`.tokens\robinhood.pickle`），方便下次免登录。拿到这个文件的人，在它过期之前相当于登录了你的账户。导出完数据后，建议把这个文件删掉。
+**Security note:** after a successful Robinhood login, a login token is saved in your user folder (`.tokens\robinhood.pickle`) so you don't have to log in next time. Anyone who has this file is effectively logged in to your account until it expires. Delete it once you have exported your data.
 
 ---
 
-## 八、如何运行（熟悉 Python 的读者）
+## 8. Running it (for readers who know Python)
 
-> 以下是技术部分。需要 Python 3.10+，以及一个免费的 [Alpaca](https://alpaca.markets/) 账户（用于申请行情 API key）。
+> Technical section. Requires Python 3.10+ and a free [Alpaca](https://alpaca.markets/) account for the market data API key.
 
-**1. 安装依赖**（建议使用独立的虚拟环境）
+**1. Install dependencies** (a virtual environment is recommended)
 
 ```powershell
 python -m venv .venv
@@ -196,103 +201,108 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-**2. 准备 Robinhood 对账单**
+**2. Add the Robinhood statement**
 
-在 Robinhood 的 "Reports and statements" 里导出交易记录 CSV，放到项目根目录。根目录下只能有这一个 `.csv` 文件。
+Export your trade history CSV from "Reports and statements" in Robinhood and put it in the project root. It must be the only `.csv` file in the root.
 
-**3. 导出精确成交时间（只读）**
+**3. Export exact fill times (read-only)**
 
 ```powershell
 python export_rh_option_orders.py
 ```
 
-运行时会在终端里要求输入 Robinhood 账号、密码和两步验证。登录凭证由 `robin_stocks` 缓存在本机用户目录，不在项目文件夹里。
+The script asks for your Robinhood username, password and two-factor code in the terminal. `robin_stocks` caches the login token in your user folder, outside the project.
 
-**4. 设置 Alpaca API key**
+**4. Set the Alpaca API key**
 
-在 PowerShell 里：
+In PowerShell:
 
 ```powershell
-$env:ALPACA_API_KEY = "你的 key"
-$env:ALPACA_API_SECRET = "你的 secret"
+$env:ALPACA_API_KEY = "your key"
+$env:ALPACA_API_SECRET = "your secret"
 ```
 
-在 Anaconda Prompt 里（新手安装用的是这个），写法不一样，等号两边不要加空格和引号：
+In Anaconda Prompt (used in the beginner steps) the syntax is different, with no spaces or quotes around the equals sign:
 
 ```bat
-set ALPACA_API_KEY=你的key
-set ALPACA_API_SECRET=你的secret
+set ALPACA_API_KEY=your-key
+set ALPACA_API_SECRET=your-secret
 ```
 
-这样设置只对当前窗口有效，关掉窗口后需要重新设置。
+These settings last only for the current window.
 
-**5. 下载行情**
+**5. Download market data**
 
 ```powershell
-# SPY/QQQ/IWM：区间内每个交易日
+# SPY/QQQ/IWM: every trading day in the range
 python fetch_minute_bars.py --range 2026-03-02 2026-11-23
 
-# 其他标的：只下载有交易的日子
+# Other tickers: only the days you traded them
 python fetch_minute_bars.py --symbols INTC TSLA NVDA
 
-# 每个交易过的期权合约
+# Every option contract you traded
 python fetch_option_bars.py --symbols SPY QQQ IWM INTC TSLA NVDA
 ```
 
-已经下载过的文件会自动跳过。Alpaca 免费账户有频率限制（每分钟 200 次请求），程序遇到限制会自动等待重试。
+Files already downloaded are skipped. The free Alpaca plan is rate-limited (200 requests per minute); the scripts wait and retry automatically.
 
-**6. 运行分析**
+**6. Run the analysis**
 
 ```powershell
-python run_analysis.py      # 完整分析，约 40 秒，输出到 output/
-python period_analysis.py   # 按时间段对比
+python run_analysis.py      # full analysis, ~40 seconds, writes to output/
+python period_analysis.py   # comparison across trading periods
 ```
 
-**7. 打开复盘界面**
+**7. Open the dashboard**
 
 ```powershell
 streamlit run streamlit_app.py
 ```
 
-浏览器会自动打开 `http://localhost:8501`。界面只在本机运行，数据不会上传到任何地方。
+Your browser opens `http://localhost:8501`. The dashboard runs only on your computer and does not upload your data anywhere.
 
-- **日间 / 夜间配色**：日间为浅黄色，夜间为深绿色。默认跟随系统设置，也可以在右上角 **⋮ → Settings → Theme** 里手动切换。配色定义在 `.streamlit/config.toml`。
-- **导出给 LLM 分析**：在左侧栏底部，点击后弹出导出窗口，使用当前的筛选条件。
+- **Day / night themes**: light cream by day, deep green by night. It follows your system setting by default; switch manually under **⋮ → Settings → Theme** at the top right. The colours are defined in `.streamlit/config.toml`.
+- **Calendar**: top right. Click a day for that day, a week (the W column on the left) for that week, or the month name for the whole month; "All" resets to every date. ◀ ▶ browse months without changing the filter.
+- **Journal**: select a row in the trade list (or a trade in the replay) and click "Note on this trade", or use "Write a note…" in the sidebar for the day's note. Notes are stored in `notes/notes.json`, which is not uploaded to GitHub.
+- **Export for LLM analysis**: at the bottom of the sidebar. It opens a dialog that uses the current filters. Dollar amounts and notes are both off by default.
+- **Chinese / English**: pick the language at the top of the sidebar; the exported pack uses the same language. You can also open `http://localhost:8501/?lang=en` directly.
 
-**8. 运行测试（开发者）**
+**8. Run the tests (developers)**
 
 ```powershell
 pip install -r requirements-dev.txt
 pytest
 ```
 
-测试只使用编造的示例数据，不需要真实交易记录。
+The tests use only made-up sample data, so no real trading history is needed.
 
-**文件说明**
+**Files**
 
-| 文件 | 作用 |
+| File | Purpose |
 |---|---|
-| `export_rh_option_orders.py` | 从 Robinhood API 导出期权订单和精确成交时间 |
-| `fetch_minute_bars.py` | 从 Alpaca 下载标的 1 分钟 K 线 |
-| `fetch_option_bars.py` | 从 Alpaca 下载期权合约 1 分钟 K 线 |
-| `run_analysis.py` | 主分析入口：数据清洗、配对、统计、回测、生成报告和图表 |
-| `period_analysis.py` | 不同交易时期的对比 |
-| `tradelab/` | 分析代码：数据处理（`data.py`）、行情和 Greeks（`market.py`）、统计（`analytics.py`）、图表（`charts.py`）、参数（`config.py`） |
-| `build_fills.py`、`analyze_trades.py` | 早期版本：只针对 SPY/QQQ/IWM 的独立往返交易分析 |
-| `streamlit_app.py` | 复盘界面入口 |
-| `dashboard/` | 界面背后的逻辑：读取数据（`data.py`）、筛选（`filters.py`）、统计与置信区间（`stats.py`）、复盘图（`charts.py`）、导出分析包（`export.py`） |
-| `tests/` | 单元测试 |
+| `export_rh_option_orders.py` | Export option orders and exact fill times from the Robinhood API |
+| `fetch_minute_bars.py` | Download underlying 1-minute bars from Alpaca |
+| `fetch_option_bars.py` | Download option contract 1-minute bars from Alpaca |
+| `run_analysis.py` | Main analysis entry point: cleaning, matching, statistics, backtests, report and charts |
+| `period_analysis.py` | Comparison across trading periods |
+| `tradelab/` | Analysis code: data handling (`data.py`), market data and Greeks (`market.py`), statistics (`analytics.py`), charts (`charts.py`), parameters (`config.py`) |
+| `build_fills.py`, `analyze_trades.py` | Earlier standalone round-trip analysis for SPY/QQQ/IWM only |
+| `streamlit_app.py` | Dashboard entry point |
+| `dashboard/` | Dashboard logic: data loading (`data.py`), filters (`filters.py`), statistics and confidence intervals (`stats.py`), replay chart (`charts.py`), analysis-pack export (`export.py`, `export_dialog.py`), journal (`notes.py`, `notes_dialog.py`), calendar (`calendar_view.py`), Chinese/English text (`i18n.py`) |
+| `tests/` | Unit tests |
 
-个人交易数据（对账单、`data/`、`output/`、`exports/`）都不包含在仓库里。
+Personal trading data (the statement, `data/`, `output/`, `exports/`, `notes/`) is not included in the repository.
+
+> Note: the full analysis report produced by `run_analysis.py` is currently written in Chinese.
 
 ---
 
-## 许可证
+## License
 
-本项目采用 [MIT License](LICENSE) 开源：可以自由使用、修改和分发，只需保留原始的版权声明。
+Released under the [MIT License](LICENSE): you may use, modify and distribute it freely, as long as the original copyright notice is kept.
 
-注意：许可证只覆盖本仓库的代码。Robinhood 和 Alpaca 的数据受各自服务条款约束，`robin_stocks` 等第三方库也有各自的许可证。
+The license covers the code in this repository only. Data from Robinhood and Alpaca is subject to their terms of service, and third-party libraries such as `robin_stocks` have their own licenses.
 
-## 免责声明
+## Disclaimer
 
-这是个人复盘和学习项目，不构成任何投资建议。分析结论只针对我自己这段时间的交易样本。
+This is a personal review and learning project and is not investment advice. The findings apply only to my own trades over this period.
