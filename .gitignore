@@ -1,0 +1,17 @@
+# Personal trading data: never commit
+*.csv
+*.json
+*.log
+*.pkl
+data/
+output/
+
+# Python / local
+__pycache__/
+*.pyc
+.venv/
+.env
+.claude/
+
+# Dashboard exports (contain trading data)
+exports/

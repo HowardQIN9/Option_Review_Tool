@@ -1,0 +1,20 @@
+[project]
+name = "option-trade-review"
+version = "0.1.0"
+description = "Replay short-dated option trades minute by minute (Robinhood fills + Alpaca bars) and export them for LLM analysis."
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = ["ignore:The 'generic' unit for NumPy timedelta:DeprecationWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+include = ["dashboard/**/*.py", "tests/**/*.py", "streamlit_app.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

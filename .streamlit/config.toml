@@ -1,0 +1,17 @@
+# Day theme: light cream. Night theme: deep green.
+# Streamlit follows the system setting by default; switch manually via ⋮ → Settings → Theme.
+
+[theme]
+font = "sans-serif"
+
+[theme.light]
+backgroundColor = "#FBF5E1"
+secondaryBackgroundColor = "#F1E7C4"
+textColor = "#1F2D25"
+primaryColor = "#1E5A3C"
+
+[theme.dark]
+backgroundColor = "#061A12"
+secondaryBackgroundColor = "#0D2A1E"
+textColor = "#F3ECD2"
+primaryColor = "#E3C25B"

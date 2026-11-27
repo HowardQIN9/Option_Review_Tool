@@ -1,0 +1,10 @@
+pandas>=2.2,<3  # analysis code verified on 2.x
+numpy>=1.26
+scipy>=1.13
+matplotlib>=3.8
+tabulate>=0.9
+requests>=2.32
+robin_stocks
+yfinance
+streamlit>=1.50  # separate light/dark themes, st.dialog, width="stretch"
+plotly>=5.20
